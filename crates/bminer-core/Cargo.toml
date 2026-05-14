@@ -1,0 +1,20 @@
+[package]
+name = "bminer-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+bytes.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

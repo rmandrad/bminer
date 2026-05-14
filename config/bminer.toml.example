@@ -1,0 +1,79 @@
+# BMiner Configuration File
+# Copy this file to ~/.config/bminer/bminer.toml and customize
+
+[pool]
+# Mining pool URL (stratum+tcp://host:port)
+url = "stratum+tcp://pool.example.com:3333"
+
+# Your Bitcoin wallet address or pool username
+username = "your_wallet_address_here"
+
+# Pool password (usually "x" or "password")
+password = "x"
+
+# Worker name (optional, for pool identification)
+worker_name = "bminer"
+
+[gpu]
+# GPU device IDs to use (empty = use all available GPUs)
+# Example: devices = [0, 1] to use only GPU 0 and 1
+devices = []
+
+# Mining intensity (1-10, higher = more aggressive)
+# 1 = very light, 5 = balanced, 10 = maximum
+intensity = 5
+
+# Maximum GPU temperature in Celsius
+# Mining will pause if temperature exceeds this
+max_temperature = 80
+
+# Maximum power usage in watts (0 = no limit)
+max_power = 0
+
+# CUDA kernel parameters (advanced)
+threads_per_block = 256
+blocks_per_grid = 1024
+
+[idle]
+# Enable idle detection (mine only when system is idle)
+enabled = true
+
+# CPU usage threshold (percentage)
+# System is considered busy if CPU usage exceeds this
+cpu_threshold = 20.0
+
+# Minimum idle duration before starting mining (seconds)
+min_idle_duration = 60
+
+# How often to check if system is idle (seconds)
+check_interval = 5
+
+# GPU utilization threshold (percentage)
+# System is considered busy if GPU usage exceeds this
+gpu_threshold = 10
+
+[monitoring]
+# Enable performance monitoring
+enabled = true
+
+# How often to update statistics (seconds)
+stats_interval = 30
+
+# Enable web dashboard (not yet implemented)
+web_dashboard = false
+
+# Web dashboard port
+web_port = 8080
+
+[logging]
+# Log level: trace, debug, info, warn, error
+level = "info"
+
+# Log to file (optional)
+# file = "/var/log/bminer/bminer.log"
+
+# Log to console
+console = true
+
+# Use JSON format for logs
+json = false
