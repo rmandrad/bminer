@@ -381,34 +381,49 @@ impl Miner {
         };
 
         for device_id in self.configured_device_ids() {
-            let temperature = manager
-                .get_temperature(device_id)
-                .map_err(|e| anyhow::anyhow!("Failed to read temperature for GPU {}: {}", device_id, e))?;
-
-            if temperature >= self.config.gpu.max_temperature {
-                tracing::warn!(
-                    "GPU {} temperature is {}C, above configured max {}C",
-                    device_id,
-                    temperature,
-                    self.config.gpu.max_temperature
-                );
-                return Ok(false);
+            match manager.get_temperature(device_id) {
+                Ok(temperature) => {
+                    if temperature >= self.config.gpu.max_temperature {
+                        tracing::warn!(
+                            "GPU {} temperature is {}C, above configured max {}C",
+                            device_id,
+                            temperature,
+                            self.config.gpu.max_temperature
+                        );
+                        return Ok(false);
+                    }
+                }
+                Err(err) => {
+                    tracing::debug!(
+                        "Skipping temperature check for GPU {} because telemetry is unavailable: {}",
+                        device_id,
+                        err
+                    );
+                }
             }
 
             if self.config.gpu.max_power > 0 {
-                let power_watts = manager
-                    .get_power_usage(device_id)
-                    .map_err(|e| anyhow::anyhow!("Failed to read power usage for GPU {}: {}", device_id, e))?
-                    / 1000;
+                match manager.get_power_usage(device_id) {
+                    Ok(power_usage) => {
+                        let power_watts = power_usage / 1000;
 
-                if power_watts >= self.config.gpu.max_power {
-                    tracing::warn!(
-                        "GPU {} power usage is {}W, above configured max {}W",
-                        device_id,
-                        power_watts,
-                        self.config.gpu.max_power
-                    );
-                    return Ok(false);
+                        if power_watts >= self.config.gpu.max_power {
+                            tracing::warn!(
+                                "GPU {} power usage is {}W, above configured max {}W",
+                                device_id,
+                                power_watts,
+                                self.config.gpu.max_power
+                            );
+                            return Ok(false);
+                        }
+                    }
+                    Err(err) => {
+                        tracing::debug!(
+                            "Skipping power check for GPU {} because telemetry is unavailable: {}",
+                            device_id,
+                            err
+                        );
+                    }
                 }
             }
         }

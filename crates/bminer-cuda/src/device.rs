@@ -1,7 +1,13 @@
 //! GPU device detection and management
 
 use crate::{GpuError, Result};
+use cudarc::driver::CudaDevice;
+use std::any::Any;
+use std::ffi::OsStr;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::Path;
 use nvml_wrapper::Nvml;
+use nvml_wrapper::error::NvmlError;
 
 /// Information about a GPU device
 #[derive(Debug, Clone)]
@@ -19,6 +25,16 @@ pub struct GpuInfo {
     pub pci_bus_id: String,
 }
 
+/// Information about a CUDA device when NVML telemetry is unavailable
+#[derive(Debug, Clone)]
+pub struct CudaDeviceInfo {
+    /// Device ID
+    pub device_id: usize,
+
+    /// Device name
+    pub name: String,
+}
+
 /// GPU manager for device detection and monitoring
 pub struct GpuManager {
     nvml: Nvml,
@@ -27,8 +43,7 @@ pub struct GpuManager {
 impl GpuManager {
     /// Initialize GPU manager and detect all NVIDIA GPUs
     pub fn new() -> Result<Self> {
-        let nvml = Nvml::init()
-            .map_err(|e| GpuError::NvmlError(e.to_string()))?;
+        let nvml = init_nvml()?;
         
         let device_count = nvml.device_count()
             .map_err(|e| GpuError::NvmlError(e.to_string()))?;
@@ -52,20 +67,22 @@ impl GpuManager {
                 .map_err(|e| GpuError::NvmlError(e.to_string()))?;
             
             let name = device.name()
-                .map_err(|e| GpuError::NvmlError(e.to_string()))?;
-            
-            let memory_info = device.memory_info()
-                .map_err(|e| GpuError::NvmlError(e.to_string()))?;
-            
-            let pci_info = device.pci_info()
-                .map_err(|e| GpuError::NvmlError(e.to_string()))?;
+                .unwrap_or_else(|_| format!("NVIDIA GPU {}", idx));
+
+            let total_memory = device.memory_info()
+                .map(|memory_info| memory_info.total)
+                .unwrap_or(0);
+
+            let pci_bus_id = device.pci_info()
+                .map(|pci_info| format!("{:04x}:{:02x}:{:02x}.0",
+                    pci_info.domain, pci_info.bus, pci_info.device))
+                .unwrap_or_else(|_| "N/A (integrated GPU or unsupported by NVML)".to_string());
             
             gpu_infos.push(GpuInfo {
                 device_id: idx as usize,
                 name,
-                total_memory: memory_info.total,
-                pci_bus_id: format!("{:04x}:{:02x}:{:02x}.0", 
-                    pci_info.domain, pci_info.bus, pci_info.device),
+                total_memory,
+                pci_bus_id,
             });
         }
         
@@ -100,6 +117,99 @@ impl GpuManager {
         
         Ok(utilization.gpu)
     }
+}
+
+/// Enumerate CUDA devices without relying on NVML telemetry
+pub fn list_cuda_devices() -> Result<Vec<CudaDeviceInfo>> {
+    let device_count = match catch_unwind(AssertUnwindSafe(CudaDevice::count)) {
+        Ok(Ok(count)) => count,
+        Ok(Err(error)) => return Err(GpuError::CudaError(error.to_string())),
+        Err(panic) => return Err(GpuError::CudaError(format!(
+            "CUDA driver probe panicked: {}",
+            panic_message(panic)
+        ))),
+    };
+
+    if device_count <= 0 {
+        return Err(GpuError::NoGpusFound);
+    }
+
+    let mut devices = Vec::new();
+
+    for idx in 0..device_count {
+        let device = CudaDevice::new(idx as usize)
+            .map_err(|e| GpuError::CudaError(e.to_string()))?;
+        let name = device
+            .name()
+            .unwrap_or_else(|_| format!("CUDA Device {}", idx));
+
+        devices.push(CudaDeviceInfo {
+            device_id: idx as usize,
+            name,
+        });
+    }
+
+    Ok(devices)
+}
+
+fn panic_message(panic: Box<dyn Any + Send>) -> String {
+    if let Some(message) = panic.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = panic.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
+fn init_nvml() -> Result<Nvml> {
+    let mut attempts = Vec::new();
+
+    if let Some(path) = std::env::var_os("BMINER_NVML_LIB_PATH") {
+        match try_nvml_path(path.as_os_str()) {
+            Ok(nvml) => return Ok(nvml),
+            Err(error) => attempts.push(format!("{} ({error})", path.to_string_lossy())),
+        }
+    }
+
+    for candidate in nvml_candidates() {
+        match try_nvml_path(candidate.as_ref()) {
+            Ok(nvml) => return Ok(nvml),
+            Err(error) => {
+                if !matches!(error, NvmlError::LibloadingError(_) | NvmlError::LibraryNotFound) {
+                    return Err(GpuError::NvmlError(error.to_string()));
+                }
+
+                attempts.push(format!("{} ({error})", candidate.display()));
+            }
+        }
+    }
+
+    Err(GpuError::NvmlError(format!(
+        "unable to locate a usable NVML library. Set BMINER_NVML_LIB_PATH to your libnvidia-ml.so path. Attempts: {}",
+        attempts.join(", ")
+    )))
+}
+
+fn try_nvml_path(path: &OsStr) -> std::result::Result<Nvml, NvmlError> {
+    let mut builder = Nvml::builder();
+    builder.lib_path(path);
+    builder.init()
+}
+
+fn nvml_candidates() -> Vec<&'static Path> {
+    vec![
+        Path::new("libnvidia-ml.so"),
+        Path::new("libnvidia-ml.so.1"),
+        Path::new("/usr/lib/wsl/lib/libnvidia-ml.so"),
+        Path::new("/usr/lib/wsl/lib/libnvidia-ml.so.1"),
+        Path::new("/usr/lib/x86_64-linux-gnu/libnvidia-ml.so"),
+        Path::new("/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1"),
+        Path::new("/usr/lib/aarch64-linux-gnu/libnvidia-ml.so"),
+        Path::new("/usr/lib/aarch64-linux-gnu/libnvidia-ml.so.1"),
+        Path::new("/usr/lib/aarch64-linux-gnu/nvidia/libnvidia-ml.so"),
+        Path::new("/usr/lib/aarch64-linux-gnu/nvidia/libnvidia-ml.so.1"),
+    ]
 }
 
 #[cfg(test)]

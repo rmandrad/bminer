@@ -5,6 +5,9 @@
 
 use crate::{Result, SystemMetrics};
 use nvml_wrapper::Nvml;
+use nvml_wrapper::error::NvmlError;
+use std::ffi::OsStr;
+use std::path::Path;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use std::time::{Duration, Instant};
 
@@ -52,7 +55,7 @@ impl IdleDetector {
                 .with_cpu(CpuRefreshKind::everything())
                 .with_memory(MemoryRefreshKind::everything()),
         );
-        let nvml = Nvml::init().ok();
+        let nvml = init_nvml().ok();
         
         // Initial refresh
         system.refresh_cpu_all();
@@ -167,18 +170,65 @@ impl IdleDetector {
             let device = nvml
                 .device_by_index(idx)
                 .map_err(|e| crate::MonitorError::GpuError(e.to_string()))?;
-            let utilization = device
-                .utilization_rates()
-                .map_err(|e| crate::MonitorError::GpuError(e.to_string()))?;
-
-            max_utilization = Some(match max_utilization {
-                Some(current) => current.max(utilization.gpu),
-                None => utilization.gpu,
-            });
+            match device.utilization_rates() {
+                Ok(utilization) => {
+                    max_utilization = Some(match max_utilization {
+                        Some(current) => current.max(utilization.gpu),
+                        None => utilization.gpu,
+                    });
+                }
+                Err(err) => {
+                    tracing::debug!(
+                        "Skipping GPU utilization telemetry for device {} because it is unavailable: {}",
+                        idx,
+                        err
+                    );
+                }
+            }
         }
 
         Ok(max_utilization)
     }
+}
+
+fn init_nvml() -> std::result::Result<Nvml, NvmlError> {
+    if let Some(path) = std::env::var_os("BMINER_NVML_LIB_PATH") {
+        return try_nvml_path(path.as_os_str());
+    }
+
+    for candidate in nvml_candidates() {
+        match try_nvml_path(candidate.as_ref()) {
+            Ok(nvml) => return Ok(nvml),
+            Err(error) => {
+                if !matches!(error, NvmlError::LibloadingError(_) | NvmlError::LibraryNotFound) {
+                    return Err(error);
+                }
+            }
+        }
+    }
+
+    Err(NvmlError::LibraryNotFound)
+}
+
+fn try_nvml_path(path: &OsStr) -> std::result::Result<Nvml, NvmlError> {
+    let mut builder = Nvml::builder();
+    builder.lib_path(path);
+    builder.init()
+}
+
+fn nvml_candidates() -> Vec<&'static Path> {
+    vec![
+        Path::new("libnvidia-ml.so"),
+        Path::new("libnvidia-ml.so.1"),
+        Path::new("/usr/lib/wsl/lib/libnvidia-ml.so"),
+        Path::new("/usr/lib/wsl/lib/libnvidia-ml.so.1"),
+        Path::new("/usr/lib/x86_64-linux-gnu/libnvidia-ml.so"),
+        Path::new("/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1"),
+        Path::new("/usr/lib/aarch64-linux-gnu/libnvidia-ml.so"),
+        Path::new("/usr/lib/aarch64-linux-gnu/libnvidia-ml.so.1"),
+        Path::new("/usr/lib/aarch64-linux-gnu/nvidia/libnvidia-ml.so"),
+        Path::new("/usr/lib/aarch64-linux-gnu/nvidia/libnvidia-ml.so.1"),
+    ]
 }
 
 #[cfg(test)]
