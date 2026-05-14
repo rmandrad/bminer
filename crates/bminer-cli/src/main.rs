@@ -6,6 +6,7 @@ mod miner;
 use clap::Parser;
 use config::BminerConfig;
 use miner::Miner;
+use std::sync::Arc;
 
 /// BMiner - Bitcoin GPU Miner
 #[derive(Parser, Debug)]
@@ -66,25 +67,35 @@ async fn main() -> anyhow::Result<()> {
         match BminerConfig::from_file(&args.config) {
             Ok(config) => {
                 tracing::info!("Configuration loaded successfully");
-                
+                let mut config = config;
+
+                if let Some(intensity) = args.intensity {
+                    config.gpu.intensity = intensity;
+                    config.validate()?;
+                    tracing::info!("Overriding mining intensity from CLI: {}", intensity);
+                }
+
                 // Create and start miner
-                let miner = Miner::new(config)?;
-                
-                // Set up Ctrl+C handler
-                let miner_clone = std::sync::Arc::new(miner);
-                let miner_for_ctrlc = miner_clone.clone();
-                
-                ctrlc::set_handler(move || {
-                    tracing::info!("Received Ctrl+C, shutting down...");
-                    let miner = miner_for_ctrlc.clone();
-                    tokio::spawn(async move {
-                        let _ = miner.stop().await;
-                        std::process::exit(0);
-                    });
-                })?;
-                
-                // Start mining
-                miner_clone.start().await?;
+                let miner = Arc::new(Miner::new(config)?);
+                let mut miner_task = {
+                    let miner = miner.clone();
+                    tokio::spawn(async move { miner.start().await })
+                };
+
+                tokio::select! {
+                    result = &mut miner_task => {
+                        result??;
+                    }
+                    signal = tokio::signal::ctrl_c() => {
+                        signal?;
+                        tracing::info!("Received Ctrl+C, shutting down...");
+
+                        miner_task.abort();
+                        let _ = miner_task.await;
+
+                        miner.stop().await?;
+                    }
+                }
             }
             Err(e) => {
                 tracing::error!("Failed to load configuration: {}", e);

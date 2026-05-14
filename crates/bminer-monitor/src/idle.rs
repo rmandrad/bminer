@@ -4,6 +4,7 @@
 //! occurs when the system is truly idle.
 
 use crate::{Result, SystemMetrics};
+use nvml_wrapper::Nvml;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use std::time::{Duration, Instant};
 
@@ -38,6 +39,7 @@ impl Default for IdleConfig {
 pub struct IdleDetector {
     config: IdleConfig,
     system: System,
+    nvml: Option<Nvml>,
     idle_since: Option<Instant>,
     last_check: Instant,
 }
@@ -50,6 +52,7 @@ impl IdleDetector {
                 .with_cpu(CpuRefreshKind::everything())
                 .with_memory(MemoryRefreshKind::everything()),
         );
+        let nvml = Nvml::init().ok();
         
         // Initial refresh
         system.refresh_cpu_all();
@@ -57,6 +60,7 @@ impl IdleDetector {
         Self {
             config,
             system,
+            nvml,
             idle_since: None,
             last_check: Instant::now(),
         }
@@ -89,6 +93,15 @@ impl IdleDetector {
             // System is busy
             self.idle_since = None;
             return Ok(false);
+        }
+
+        if let Some(gpu_usage) = self.max_gpu_utilization()? {
+            tracing::debug!("GPU usage: {}%", gpu_usage);
+
+            if gpu_usage > self.config.gpu_threshold {
+                self.idle_since = None;
+                return Ok(false);
+            }
         }
         
         // System appears idle
@@ -138,6 +151,33 @@ impl IdleDetector {
         } else {
             0
         }
+    }
+
+    fn max_gpu_utilization(&self) -> Result<Option<u32>> {
+        let Some(nvml) = &self.nvml else {
+            return Ok(None);
+        };
+
+        let device_count = nvml
+            .device_count()
+            .map_err(|e| crate::MonitorError::GpuError(e.to_string()))?;
+        let mut max_utilization: Option<u32> = None;
+
+        for idx in 0..device_count {
+            let device = nvml
+                .device_by_index(idx)
+                .map_err(|e| crate::MonitorError::GpuError(e.to_string()))?;
+            let utilization = device
+                .utilization_rates()
+                .map_err(|e| crate::MonitorError::GpuError(e.to_string()))?;
+
+            max_utilization = Some(match max_utilization {
+                Some(current) => current.max(utilization.gpu),
+                None => utilization.gpu,
+            });
+        }
+
+        Ok(max_utilization)
     }
 }
 

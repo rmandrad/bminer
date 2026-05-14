@@ -146,6 +146,7 @@ electrum
 # 7. Copy address (bc1...)
 
 # Use address in BMiner config
+cp config/braiins-pool-test.toml.example config/braiins-pool-test.toml
 nano config/braiins-pool-test.toml
 # Replace YOUR_BITCOIN_ADDRESS_HERE with your address
 ```
@@ -235,13 +236,15 @@ A: Yes, just update the config file and restart BMiner.
 After getting your Bitcoin address:
 
 1. ✅ Copy your address
-2. ✅ Edit `config/braiins-pool-test.toml`
-3. ✅ Replace `YOUR_BITCOIN_ADDRESS_HERE`
-4. ✅ Save the file
-5. ✅ Start BMiner!
+2. ✅ Copy `config/braiins-pool-test.toml.example` to `config/braiins-pool-test.toml`
+3. ✅ Edit `config/braiins-pool-test.toml`
+4. ✅ Replace `YOUR_BITCOIN_ADDRESS_HERE`
+5. ✅ Save the file
+6. ✅ Start BMiner!
 
 ```bash
-# Edit config
+# Create and edit local config
+cp config/braiins-pool-test.toml.example config/braiins-pool-test.toml
 nano config/braiins-pool-test.toml
 
 # Start mining

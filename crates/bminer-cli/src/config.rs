@@ -228,6 +228,18 @@ impl BminerConfig {
         if self.gpu.intensity < 1 || self.gpu.intensity > 10 {
             return Err(ConfigError::ValidationError("GPU intensity must be between 1 and 10".to_string()));
         }
+
+        if self.gpu.threads_per_block == 0 {
+            return Err(ConfigError::ValidationError(
+                "GPU threads_per_block must be greater than 0".to_string(),
+            ));
+        }
+
+        if self.gpu.blocks_per_grid == 0 {
+            return Err(ConfigError::ValidationError(
+                "GPU blocks_per_grid must be greater than 0".to_string(),
+            ));
+        }
         
         // Validate idle thresholds
         if self.idle.cpu_threshold < 0.0 || self.idle.cpu_threshold > 100.0 {
@@ -236,6 +248,18 @@ impl BminerConfig {
         
         if self.idle.gpu_threshold > 100 {
             return Err(ConfigError::ValidationError("GPU threshold must be between 0 and 100".to_string()));
+        }
+
+        if self.monitoring.enabled && self.monitoring.stats_interval == 0 {
+            return Err(ConfigError::ValidationError(
+                "Monitoring stats_interval must be greater than 0 when monitoring is enabled".to_string(),
+            ));
+        }
+
+        if self.monitoring.web_dashboard && self.monitoring.web_port == 0 {
+            return Err(ConfigError::ValidationError(
+                "Monitoring web_port must be greater than 0 when web_dashboard is enabled".to_string(),
+            ));
         }
         
         Ok(())
@@ -299,6 +323,25 @@ mod tests {
         
         // Invalid CPU threshold
         config.idle.cpu_threshold = 150.0;
+        assert!(config.validate().is_err());
+        config.idle.cpu_threshold = 20.0;
+
+        // Invalid CUDA launch parameters
+        config.gpu.threads_per_block = 0;
+        assert!(config.validate().is_err());
+        config.gpu.threads_per_block = 256;
+
+        config.gpu.blocks_per_grid = 0;
+        assert!(config.validate().is_err());
+        config.gpu.blocks_per_grid = 1024;
+
+        // Invalid monitoring settings
+        config.monitoring.stats_interval = 0;
+        assert!(config.validate().is_err());
+        config.monitoring.stats_interval = 30;
+
+        config.monitoring.web_dashboard = true;
+        config.monitoring.web_port = 0;
         assert!(config.validate().is_err());
     }
     

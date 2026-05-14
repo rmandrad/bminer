@@ -22,6 +22,8 @@ logs/
 # Config (keep examples)
 config/bminer.toml
 !config/bminer.toml.example
+config/*.toml
+!config/*.toml.example
 
 # Build artifacts
 *.so
@@ -33,5 +35,3 @@ config/bminer.toml
 # CUDA
 *.ptx
 *.cubin
-
-# Made with Bob

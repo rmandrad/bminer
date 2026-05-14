@@ -1,0 +1,71 @@
+# BMiner Configuration for Braiins Solo Mining Test
+# Copy this file to config/braiins-pool-test.toml and customize locally.
+
+[pool]
+# Braiins Solo Stratum V1 endpoint
+url = "stratum+tcp://solo.stratum.braiins.com:3333"
+
+# Your Bitcoin wallet address
+# BMiner will authorize as "<username>.<worker_name>"
+username = "YOUR_BITCOIN_ADDRESS_HERE"
+
+# Password can be any value for Braiins Solo
+password = "x"
+
+# Worker name for Braiins worker identification
+worker_name = "bminer-test"
+
+[gpu]
+# Use all available GPUs (empty array = all GPUs)
+# Or specify: devices = [0] to use only GPU 0
+devices = [0]
+
+# Mining intensity (1-10). Higher values use larger chunks and less pacing.
+intensity = 5
+
+# Mining pauses if temperature reaches this value
+max_temperature = 80
+
+# Maximum power usage (watts, 0 = no limit)
+max_power = 0
+
+# CUDA kernel launch parameters
+threads_per_block = 256
+blocks_per_grid = 1024
+
+[idle]
+# Disable idle detection for continuous testing
+enabled = false
+
+# CPU usage threshold (percentage)
+cpu_threshold = 40.0
+
+# Minimum idle duration before mining (seconds)
+min_idle_duration = 60
+
+# Check interval (seconds)
+check_interval = 5
+
+# GPU utilization threshold (percentage)
+gpu_threshold = 40
+
+[monitoring]
+# Enable performance monitoring
+enabled = true
+
+# Statistics update interval (seconds)
+stats_interval = 30
+
+# Web dashboard (not yet implemented)
+web_dashboard = false
+web_port = 8080
+
+[logging]
+# Log level for testing
+level = "info"
+
+# Log to console
+console = true
+
+# Use JSON format for logs
+json = false

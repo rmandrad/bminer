@@ -4,6 +4,7 @@
 //! the pool client, GPU hashers, and idle detection.
 
 use bminer_core::{Hasher, Work};
+use bminer_cuda::device::GpuManager;
 use bminer_cuda::hasher::CudaHasher;
 use bminer_monitor::idle::IdleDetector;
 use bminer_pool::{PoolClient, Share};
@@ -34,6 +35,11 @@ pub struct MiningStats {
     
     /// Last share time
     pub last_share: Option<Instant>,
+}
+
+enum MineWorkOutcome {
+    Completed,
+    GpuPaused,
 }
 
 impl MiningStats {
@@ -84,9 +90,19 @@ impl Miner {
         };
         
         for device_id in devices {
-            match CudaHasher::new(device_id) {
+            match CudaHasher::new_with_launch_params(
+                device_id,
+                config.gpu.threads_per_block,
+                config.gpu.blocks_per_grid,
+            ) {
                 Ok(hasher) => {
-                    tracing::info!("Initialized hasher for GPU {}", device_id);
+                    tracing::info!(
+                        "Initialized hasher for device {}: {} with launch params: {} threads/block, {} blocks/grid",
+                        device_id,
+                        hasher.device_name(),
+                        config.gpu.threads_per_block,
+                        config.gpu.blocks_per_grid
+                    );
                     hashers.push(Arc::new(hasher));
                 }
                 Err(e) => {
@@ -121,6 +137,26 @@ impl Miner {
     /// Start mining
     pub async fn start(&self) -> anyhow::Result<()> {
         tracing::info!("Starting BMiner...");
+        let (nonce_range, pause_duration) = self.intensity_settings();
+        tracing::info!(
+            "Mining intensity set to {} ({} nonces/chunk, {} ms pause between chunks)",
+            self.config.gpu.intensity,
+            nonce_range,
+            pause_duration.as_millis()
+        );
+
+        if self.config.monitoring.enabled {
+            tracing::info!(
+                "Performance monitoring enabled (stats interval: {}s)",
+                self.config.monitoring.stats_interval
+            );
+        } else {
+            tracing::info!("Performance monitoring disabled");
+        }
+
+        if self.config.monitoring.web_dashboard {
+            tracing::warn!("Web dashboard is enabled in config but is not implemented yet");
+        }
         
         // Set running flag
         *self.running.lock().await = true;
@@ -158,6 +194,7 @@ impl Miner {
         let mut stats = self.stats.lock().await;
         stats.start_time = Some(Instant::now());
         drop(stats);
+        let mut gpu_paused = false;
         
         loop {
             // Check if we should stop
@@ -176,6 +213,17 @@ impl Miner {
                 }
                 drop(detector);
             }
+
+            if !self.gpu_within_limits()? {
+                gpu_paused = true;
+                sleep(Duration::from_secs(self.config.idle.check_interval.max(1))).await;
+                continue;
+            }
+
+            if gpu_paused {
+                tracing::info!("GPU back within configured limits, resuming mining");
+                gpu_paused = false;
+            }
             
             // Get work from pool
             let work = {
@@ -193,8 +241,14 @@ impl Miner {
             tracing::info!("Received new work: job_id={}", work.job_id);
             
             // Mine the work
-            if let Err(e) = self.mine_work(work).await {
-                tracing::error!("Mining error: {}", e);
+            match self.mine_work(work).await {
+                Ok(MineWorkOutcome::Completed) => {}
+                Ok(MineWorkOutcome::GpuPaused) => {
+                    gpu_paused = true;
+                }
+                Err(e) => {
+                    tracing::error!("Mining error: {}", e);
+                }
             }
         }
         
@@ -202,9 +256,10 @@ impl Miner {
     }
     
     /// Mine a work unit
-    async fn mine_work(&self, work: Work) -> anyhow::Result<()> {
-        let nonce_range = 1_000_000u32; // Mine 1M nonces per iteration
+    async fn mine_work(&self, work: Work) -> anyhow::Result<MineWorkOutcome> {
+        let (nonce_range, pause_duration) = self.intensity_settings();
         let mut start_nonce = 0u32;
+        let mut last_stats_log = Instant::now();
         
         // Use first hasher for now (multi-GPU support can be added later)
         let hasher = &self.hashers[0];
@@ -224,6 +279,12 @@ impl Miner {
                     break;
                 }
                 drop(detector);
+            }
+
+            if !self.gpu_within_limits()? {
+                tracing::warn!("GPU limits exceeded, pausing mining until the device cools down");
+                sleep(Duration::from_secs(self.config.idle.check_interval.max(1))).await;
+                return Ok(MineWorkOutcome::GpuPaused);
             }
             
             // Mine a range of nonces
@@ -275,23 +336,91 @@ impl Miner {
             
             // Move to next nonce range
             start_nonce = start_nonce.wrapping_add(nonce_range);
+
+            if !pause_duration.is_zero() {
+                sleep(pause_duration).await;
+            }
             
             // Log progress periodically
-            if start_nonce % 10_000_000 == 0 {
+            if self.config.monitoring.enabled
+                && last_stats_log.elapsed()
+                    >= Duration::from_secs(self.config.monitoring.stats_interval)
+            {
                 let stats = self.stats.lock().await;
                 tracing::info!("Mining: {:.2} MH/s, {} shares ({:.1}% accepted)", 
                               stats.hashrate() / 1_000_000.0,
                               stats.shares_submitted,
                               stats.acceptance_rate());
+                last_stats_log = Instant::now();
             }
         }
         
-        Ok(())
+        Ok(MineWorkOutcome::Completed)
     }
     
     /// Get current mining statistics
     pub async fn get_stats(&self) -> MiningStats {
         self.stats.lock().await.clone()
+    }
+
+    fn configured_device_ids(&self) -> Vec<usize> {
+        if self.config.gpu.devices.is_empty() {
+            vec![0]
+        } else {
+            self.config.gpu.devices.clone()
+        }
+    }
+
+    fn gpu_within_limits(&self) -> anyhow::Result<bool> {
+        let manager = match GpuManager::new() {
+            Ok(manager) => manager,
+            Err(err) => {
+                tracing::warn!("Unable to read GPU telemetry, skipping thermal checks: {}", err);
+                return Ok(true);
+            }
+        };
+
+        for device_id in self.configured_device_ids() {
+            let temperature = manager
+                .get_temperature(device_id)
+                .map_err(|e| anyhow::anyhow!("Failed to read temperature for GPU {}: {}", device_id, e))?;
+
+            if temperature >= self.config.gpu.max_temperature {
+                tracing::warn!(
+                    "GPU {} temperature is {}C, above configured max {}C",
+                    device_id,
+                    temperature,
+                    self.config.gpu.max_temperature
+                );
+                return Ok(false);
+            }
+
+            if self.config.gpu.max_power > 0 {
+                let power_watts = manager
+                    .get_power_usage(device_id)
+                    .map_err(|e| anyhow::anyhow!("Failed to read power usage for GPU {}: {}", device_id, e))?
+                    / 1000;
+
+                if power_watts >= self.config.gpu.max_power {
+                    tracing::warn!(
+                        "GPU {} power usage is {}W, above configured max {}W",
+                        device_id,
+                        power_watts,
+                        self.config.gpu.max_power
+                    );
+                    return Ok(false);
+                }
+            }
+        }
+
+        Ok(true)
+    }
+
+    fn intensity_settings(&self) -> (u32, Duration) {
+        let intensity = self.config.gpu.intensity.clamp(1, 10) as u32;
+        let nonce_range = 1_000_000u32.saturating_mul(intensity);
+        let pause_ms = (10 - intensity) * 2;
+        (nonce_range, Duration::from_millis(pause_ms as u64))
     }
 }
 

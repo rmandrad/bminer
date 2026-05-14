@@ -25,6 +25,7 @@ The binary will be at `target/release/bminer`
 Edit the test configuration file:
 
 ```bash
+cp config/braiins-pool-test.toml.example config/braiins-pool-test.toml
 nano config/braiins-pool-test.toml
 ```
 
@@ -156,11 +157,12 @@ sudo ufw status
 
 ### Low Hashrate
 
-The current implementation uses CPU fallback for hashing. Expected performance:
-- **CPU mining**: 0.1-1 MH/s (very slow)
-- **GPU mining** (when CUDA kernels are optimized): 100+ MH/s
+BMiner now tries the CUDA mining kernel first and automatically falls back to CPU hashing
+if CUDA or NVRTC is unavailable. Expected performance:
+- **CPU fallback**: 0.1-5 MH/s (very slow)
+- **GPU mining**: much higher than CPU, but still dependent on kernel maturity and tuning
 
-To improve performance, CUDA kernel optimization is needed (future enhancement).
+If startup logs show `CPU fallback`, BMiner could not initialize the CUDA path on that machine.
 
 ### High Rejection Rate
 
@@ -243,7 +245,7 @@ After successful testing:
 ## Support
 
 - Check logs in console output
-- Review configuration in `config/braiins-pool-test.toml`
+- Review your local configuration in `config/braiins-pool-test.toml`
 - Verify GPU status with `--gpu-info`
 - Test connectivity with `--dry-run`
 

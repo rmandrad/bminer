@@ -61,6 +61,25 @@ impl StratumClient {
     fn next_id(&self) -> u64 {
         self.request_id.fetch_add(1, Ordering::SeqCst)
     }
+
+    /// Build the pool worker identity used for authorization and share submission.
+    fn worker_identity(&self) -> String {
+        let username = self.config.username.trim();
+        let worker_name = self.config.worker_name.trim();
+
+        if worker_name.is_empty() {
+            return username.to_string();
+        }
+
+        if username
+            .rsplit_once('.')
+            .is_some_and(|(_, suffix)| suffix == worker_name)
+        {
+            return username.to_string();
+        }
+
+        format!("{}.{}", username, worker_name)
+    }
     
     /// Send a JSON-RPC request
     async fn send_request(&self, method: &str, params: Vec<Value>) -> Result<()> {
@@ -237,10 +256,11 @@ impl PoolClient for StratumClient {
     }
     
     async fn authorize(&mut self) -> Result<()> {
-        tracing::info!("Authorizing worker: {}", self.config.username);
-        
+        let worker_identity = self.worker_identity();
+        tracing::info!("Authorizing worker: {}", worker_identity);
+
         self.send_request("mining.authorize", vec![
-            json!(self.config.username),
+            json!(worker_identity),
             json!(self.config.password),
         ]).await?;
         
@@ -286,13 +306,14 @@ impl PoolClient for StratumClient {
     
     async fn submit_share(&mut self, share: Share) -> Result<bool> {
         tracing::info!("Submitting share for job: {}", share.job_id);
-        
+
         let extranonce2_hex = hex::encode(&share.extranonce2);
         let ntime_hex = format!("{:08x}", share.ntime);
         let nonce_hex = format!("{:08x}", share.nonce);
-        
+        let worker_identity = self.worker_identity();
+
         self.send_request("mining.submit", vec![
-            json!(self.config.username),
+            json!(worker_identity),
             json!(share.job_id),
             json!(extranonce2_hex),
             json!(ntime_hex),
@@ -324,6 +345,48 @@ impl PoolClient for StratumClient {
         self.reader = None;
         tracing::info!("Disconnected from pool");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StratumClient;
+    use crate::PoolConfig;
+
+    fn test_client(username: &str, worker_name: &str) -> StratumClient {
+        StratumClient::new(PoolConfig {
+            url: "stratum+tcp://pool.example.com:3333".to_string(),
+            username: username.to_string(),
+            password: "x".to_string(),
+            worker_name: worker_name.to_string(),
+        })
+    }
+
+    #[test]
+    fn appends_worker_name_to_wallet_address() {
+        let client = test_client(
+            "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+            "bminer",
+        );
+
+        assert_eq!(
+            client.worker_identity(),
+            "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh.bminer"
+        );
+    }
+
+    #[test]
+    fn preserves_prequalified_username() {
+        let client = test_client("wallet.worker1", "worker1");
+
+        assert_eq!(client.worker_identity(), "wallet.worker1");
+    }
+
+    #[test]
+    fn leaves_username_unchanged_without_worker_name() {
+        let client = test_client("wallet-only", "");
+
+        assert_eq!(client.worker_identity(), "wallet-only");
     }
 }
 

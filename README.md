@@ -44,7 +44,10 @@ sudo ln -sf /usr/lib/wsl/lib/libnvidia-ml.so.1 /usr/lib/wsl/lib/libnvidia-ml.so
 # 2. Build BMiner
 cargo build --release
 
-# 3. Use the launcher script
+# 3. Create a local test config from the example
+cp config/braiins-pool-test.toml.example config/braiins-pool-test.toml
+
+# 4. Use the launcher script
 ./bminer.sh --gpu-info
 ./bminer.sh --config config/braiins-pool-test.toml
 ```

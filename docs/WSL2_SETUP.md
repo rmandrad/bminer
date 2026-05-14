@@ -53,6 +53,9 @@ Use the provided launcher script that handles library paths automatically:
 # Check GPU info
 ./bminer.sh --gpu-info
 
+# Create a local test config from the example
+cp config/braiins-pool-test.toml.example config/braiins-pool-test.toml
+
 # Start mining
 ./bminer.sh --config config/braiins-pool-test.toml
 
@@ -77,12 +80,14 @@ Follow the guide in `docs/BITCOIN_WALLET_SETUP.md` to get a Bitcoin address.
 **Quick option for testing:**
 ```bash
 # Use the demo address already in the config
+cp config/braiins-pool-test.toml.example config/braiins-pool-test.toml
 ./bminer.sh --config config/braiins-pool-test.toml
 ```
 
 ### 2. Edit Configuration
 
 ```bash
+cp config/braiins-pool-test.toml.example config/braiins-pool-test.toml
 nano config/braiins-pool-test.toml
 ```
 
