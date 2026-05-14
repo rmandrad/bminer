@@ -15,16 +15,16 @@ pub type Result<T> = std::result::Result<T, GpuError>;
 pub enum GpuError {
     #[error("CUDA error: {0}")]
     CudaError(String),
-    
+
     #[error("NVML error: {0}")]
     NvmlError(String),
-    
+
     #[error("No compatible GPUs found")]
     NoGpusFound,
-    
+
     #[error("Device {0} not found")]
     DeviceNotFound(usize),
-    
+
     #[error("Kernel launch failed: {0}")]
     KernelLaunchFailed(String),
 }
