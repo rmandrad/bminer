@@ -174,7 +174,12 @@ impl CudaHasher {
 
     fn load_mining_kernel(device: &Arc<CudaDevice>) -> std::result::Result<(), String> {
         let ptx = compile_ptx(CUDA_KERNEL_SRC)
-            .map_err(|e| format!("failed to compile CUDA kernel: {}", e))?;
+            .map_err(|e| {
+                format!(
+                    "failed to compile CUDA kernel: {}. BMiner requires the CUDA toolkit `nvrtc` library at runtime. Install a CUDA 12.x toolkit or set `BMINER_CUDA_LIB_DIR`/`LD_LIBRARY_PATH` to the directory containing `libnvrtc.so`.",
+                    e
+                )
+            })?;
 
         device
             .load_ptx(ptx, CUDA_MODULE_NAME, &[CUDA_KERNEL_NAME])

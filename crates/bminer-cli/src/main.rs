@@ -3,7 +3,9 @@
 mod config;
 mod miner;
 
+use anyhow::anyhow;
 use bminer_core::{Hasher, Work};
+use bminer_cuda::device::list_cuda_devices;
 use bminer_cuda::hasher::CudaHasher;
 use clap::Parser;
 use config::BminerConfig;
@@ -79,11 +81,16 @@ async fn main() -> anyhow::Result<()> {
                 tracing::info!("Configuration loaded successfully");
                 let mut config = config;
 
+                apply_cli_overrides(&mut config, &args)?;
+
                 if let Some(intensity) = args.intensity {
                     config.gpu.intensity = intensity;
                     config.validate()?;
                     tracing::info!("Overriding mining intensity from CLI: {}", intensity);
                 }
+
+                let resolved_devices = resolve_configured_cuda_devices(&config.gpu.devices)?;
+                config.gpu.devices = resolved_devices;
 
                 // Create and start miner
                 let miner = Arc::new(Miner::new(config)?);
@@ -124,6 +131,81 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn apply_cli_overrides(config: &mut BminerConfig, args: &Args) -> anyhow::Result<()> {
+    if let Some(devices) = &args.devices {
+        config.gpu.devices = parse_device_list(devices)?;
+        config.validate()?;
+        tracing::info!("Overriding GPU devices from CLI: {:?}", config.gpu.devices);
+    }
+
+    Ok(())
+}
+
+fn parse_device_list(devices: &str) -> anyhow::Result<Vec<usize>> {
+    let parsed = devices
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            entry
+                .parse::<usize>()
+                .map_err(|error| anyhow!("Invalid GPU device ID `{entry}`: {error}"))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    if parsed.is_empty() {
+        anyhow::bail!("GPU device list cannot be empty. Use comma-separated zero-based IDs such as `0` or `0,1`.");
+    }
+
+    Ok(parsed)
+}
+
+fn resolve_configured_cuda_devices(configured_devices: &[usize]) -> anyhow::Result<Vec<usize>> {
+    let available_devices = list_cuda_devices()
+        .map_err(|error| {
+            anyhow!(
+                "Unable to enumerate CUDA devices: {}. If you're running under WSL2, confirm the NVIDIA driver is available inside WSL, `nvidia-smi` works, and `/usr/lib/wsl/lib/libcuda.so` exists.",
+                error
+            )
+        })?
+        .into_iter()
+        .map(|device| device.device_id)
+        .collect::<Vec<_>>();
+
+    resolve_requested_devices(configured_devices, &available_devices)
+}
+
+fn resolve_requested_devices(
+    configured_devices: &[usize],
+    available_devices: &[usize],
+) -> anyhow::Result<Vec<usize>> {
+    if available_devices.is_empty() {
+        anyhow::bail!(
+            "No CUDA devices are available. `--gpu-info` should list at least one device before mining or benchmarking can run."
+        );
+    }
+
+    if configured_devices.is_empty() {
+        return Ok(available_devices.to_vec());
+    }
+
+    let missing_devices = configured_devices
+        .iter()
+        .copied()
+        .filter(|device_id| !available_devices.contains(device_id))
+        .collect::<Vec<_>>();
+
+    if !missing_devices.is_empty() {
+        anyhow::bail!(
+            "Configured GPU device ID(s) {:?} are unavailable. Available CUDA device IDs: {:?}. Device IDs are zero-based, so the first GPU is `0`.",
+            missing_devices,
+            available_devices
+        );
+    }
+
+    Ok(configured_devices.to_vec())
+}
+
 fn parse_log_level(level: &str) -> tracing::Level {
     match level.to_lowercase().as_str() {
         "trace" => tracing::Level::TRACE,
@@ -136,8 +218,27 @@ fn parse_log_level(level: &str) -> tracing::Level {
 }
 
 fn configure_wsl_library_paths() {
-    let wsl_lib = Path::new("/usr/lib/wsl/lib");
-    if !wsl_lib.exists() {
+    let mut candidates = vec![
+        Path::new("/usr/lib/wsl/lib"),
+        Path::new("/opt/cuda/lib64"),
+        Path::new("/opt/cuda/targets/x86_64-linux/lib"),
+        Path::new("/usr/local/cuda/lib64"),
+        Path::new("/usr/local/cuda-12/lib64"),
+        Path::new("/usr/local/cuda-12.5/lib64"),
+    ];
+
+    let custom_cuda_lib_dir = std::env::var_os("BMINER_CUDA_LIB_DIR");
+    if let Some(path) = custom_cuda_lib_dir.as_deref().map(Path::new) {
+        candidates.push(path);
+    }
+
+    for candidate in candidates {
+        append_library_path(candidate);
+    }
+}
+
+fn append_library_path(path: &Path) {
+    if !path.exists() {
         return;
     }
 
@@ -146,15 +247,15 @@ fn configure_wsl_library_paths() {
 
     if current_string
         .split(':')
-        .any(|entry| entry == wsl_lib.to_string_lossy())
+        .any(|entry| entry == path.to_string_lossy())
     {
         return;
     }
 
     let updated = if current_string.is_empty() {
-        wsl_lib.to_string_lossy().into_owned()
+        path.to_string_lossy().into_owned()
     } else {
-        format!("{}:{}", wsl_lib.display(), current_string)
+        format!("{}:{}", path.display(), current_string)
     };
 
     unsafe {
@@ -231,13 +332,15 @@ async fn run_benchmark(args: &Args) -> anyhow::Result<()> {
     tracing::info!("Benchmark mode");
 
     let mut config = BminerConfig::from_file(&args.config)?;
+    apply_cli_overrides(&mut config, args)?;
 
     if let Some(intensity) = args.intensity {
         config.gpu.intensity = intensity;
         config.validate()?;
     }
 
-    let device_id = config.gpu.devices.first().copied().unwrap_or(0);
+    let resolved_devices = resolve_configured_cuda_devices(&config.gpu.devices)?;
+    let device_id = resolved_devices[0];
     let intensity = config.gpu.intensity.clamp(1, 10) as u32;
     let nonce_range = 1_000_000u32.saturating_mul(intensity);
     let mut work = benchmark_work();
@@ -327,6 +430,38 @@ fn benchmark_work() -> Work {
     work.target = [0u8; 32];
     work.extranonce1 = vec![0u8; 8];
     work
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_device_list, resolve_requested_devices};
+
+    #[test]
+    fn parse_device_list_accepts_zero_based_csv() {
+        assert_eq!(parse_device_list("0, 1,2").unwrap(), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn parse_device_list_rejects_empty_input() {
+        let error = parse_device_list(" , ").unwrap_err().to_string();
+        assert!(error.contains("cannot be empty"));
+    }
+
+    #[test]
+    fn resolve_requested_devices_defaults_to_all_available_devices() {
+        let resolved = resolve_requested_devices(&[], &[0, 2]).unwrap();
+        assert_eq!(resolved, vec![0, 2]);
+    }
+
+    #[test]
+    fn resolve_requested_devices_reports_invalid_device_ids() {
+        let error = resolve_requested_devices(&[1], &[0])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("zero-based"));
+        assert!(error.contains("[1]"));
+        assert!(error.contains("[0]"));
+    }
 }
 
 // Made with Bob

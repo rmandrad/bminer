@@ -43,6 +43,28 @@ Device 0: NVIDIA RTX 2000 Ada Generation Laptop GPU
   Utilization: 0%
 ```
 
+### 3. Verify CUDA Toolkit Runtime Compilation Support
+
+BMiner compiles its CUDA kernel at startup, so it needs `libnvrtc.so` from a CUDA 12.x toolkit inside WSL.
+
+Check for it with:
+
+```bash
+find /usr/local /usr -name 'libnvrtc.so*' 2>/dev/null
+```
+
+Common working locations are:
+- `/usr/local/cuda/lib64`
+- `/usr/local/cuda-12/lib64`
+- `/usr/local/cuda-12.5/lib64`
+
+If your toolkit is installed in a nonstandard location, point BMiner at it:
+
+```bash
+export BMINER_CUDA_LIB_DIR=/path/to/cuda/lib64
+./bminer.sh --benchmark --config config/braiins-pool-test.toml
+```
+
 ## Running BMiner
 
 ### Easy Way (Recommended)
@@ -68,7 +90,7 @@ cp config/braiins-pool-test.toml.example config/braiins-pool-test.toml
 If you prefer to run the binary directly:
 
 ```bash
-LD_LIBRARY_PATH=/usr/lib/wsl/lib:$LD_LIBRARY_PATH ./target/release/bminer --config config/braiins-pool-test.toml
+LD_LIBRARY_PATH=/usr/lib/wsl/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH ./target/release/bminer --config config/braiins-pool-test.toml
 ```
 
 ## Configuration
@@ -111,6 +133,26 @@ Replace `YOUR_BITCOIN_ADDRESS_HERE` with your actual Bitcoin address (starts wit
 
 # ✅ Do this instead:
 ./bminer.sh --config config.toml
+```
+
+### Error: "Unable to dynamically load the \"nvrtc\" shared library"
+
+BMiner can see the GPU, but the CUDA toolkit runtime compiler is missing from the library search path.
+
+**Solution:**
+
+1. Install a CUDA 12.x toolkit inside WSL if it is not already installed.
+2. Add the toolkit `lib64` directory to `LD_LIBRARY_PATH`, or set `BMINER_CUDA_LIB_DIR`.
+
+Examples:
+
+```bash
+export BMINER_CUDA_LIB_DIR=/usr/local/cuda/lib64
+./bminer.sh --benchmark --config config/braiins-pool-test.toml
+```
+
+```bash
+LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH ./target/release/bminer --benchmark --config config/braiins-pool-test.toml
 ```
 
 ### Error: "libnvidia-ml.so: cannot open shared object file"

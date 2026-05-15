@@ -6,7 +6,7 @@ use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
 use std::any::Any;
 use std::ffi::OsStr;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{catch_unwind, set_hook, take_hook, AssertUnwindSafe};
 use std::path::Path;
 
 /// Information about a GPU device
@@ -140,7 +140,7 @@ impl GpuManager {
 
 /// Enumerate CUDA devices without relying on NVML telemetry
 pub fn list_cuda_devices() -> Result<Vec<CudaDeviceInfo>> {
-    let device_count = match catch_unwind(AssertUnwindSafe(CudaDevice::count)) {
+    let device_count = match catch_cuda_probe(CudaDevice::count) {
         Ok(Ok(count)) => count,
         Ok(Err(error)) => return Err(GpuError::CudaError(error.to_string())),
         Err(panic) => {
@@ -179,6 +179,17 @@ fn panic_message(panic: Box<dyn Any + Send>) -> String {
     } else {
         "unknown panic".to_string()
     }
+}
+
+fn catch_cuda_probe<T, F>(probe: F) -> std::thread::Result<T>
+where
+    F: FnOnce() -> T,
+{
+    let hook = take_hook();
+    set_hook(Box::new(|_| {}));
+    let result = catch_unwind(AssertUnwindSafe(probe));
+    set_hook(hook);
+    result
 }
 
 fn init_nvml() -> Result<Nvml> {

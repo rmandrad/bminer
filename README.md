@@ -41,6 +41,11 @@ If you're running WSL2 on Windows with an NVIDIA GPU, see the **[WSL2 Setup Guid
 # 1. Create NVML symlink (one-time setup)
 sudo ln -sf /usr/lib/wsl/lib/libnvidia-ml.so.1 /usr/lib/wsl/lib/libnvidia-ml.so
 
+# 1a. Ensure the CUDA toolkit runtime compiler is available for kernel compilation
+# BMiner needs libnvrtc.so from a CUDA 12.x toolkit inside WSL.
+# If CUDA is installed in a nonstandard location, point BMiner at its lib64 directory:
+# export BMINER_CUDA_LIB_DIR=/usr/local/cuda/lib64
+
 # 2. Build BMiner
 cargo build --release
 
@@ -80,6 +85,8 @@ nano ~/.config/bminer/bminer.toml
 # 4. Start mining
 ./target/release/bminer
 ```
+
+If benchmarking or mining reports that `nvrtc` cannot be loaded, install a CUDA 12.x toolkit inside Linux/WSL and ensure its `lib64` directory is on `LD_LIBRARY_PATH`, or set `BMINER_CUDA_LIB_DIR` to that directory before running `./bminer.sh`.
 
 ## Configuration
 
